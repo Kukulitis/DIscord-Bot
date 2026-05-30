@@ -1,5 +1,9 @@
 require('dotenv').config();
+const http = require('http');
 const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
+
+// Minimal HTTP server — keeps Render happy by holding an open port
+http.createServer((_, res) => res.writeHead(200).end()).listen(process.env.PORT || 3000);
 const itemCmd   = require('./commands/item');
 const marketCmd = require('./commands/market');
 
