@@ -32,6 +32,14 @@ const CURRENCY_CHOICES = Object.entries(CURRENCIES).map(([value, { label, emoji 
   value,
 }));
 
+// Channel where perk-ready pings are posted
+const PERK_COOLDOWN_CHANNEL_ID = '1518708280686543019';
+
+const PERK_COOLDOWNS = {
+  weekly:  7  * 24 * 60 * 60 * 1000,
+  monthly: 30 * 24 * 60 * 60 * 1000,
+};
+
 const ITEMS_PER_PAGE = 8;
 
 const COLORS = {
@@ -41,4 +49,10 @@ const COLORS = {
   default: 0x9b59b6,
 };
 
-module.exports = { STATUSES, STATUS_CHOICES, CATEGORIES, CATEGORY_CHOICES, CURRENCIES, CURRENCY_CHOICES, ITEMS_PER_PAGE, COLORS };
+module.exports = {
+  STATUSES, STATUS_CHOICES,
+  CATEGORIES, CATEGORY_CHOICES,
+  CURRENCIES, CURRENCY_CHOICES,
+  ITEMS_PER_PAGE, COLORS,
+  PERK_COOLDOWN_CHANNEL_ID, PERK_COOLDOWNS,
+};

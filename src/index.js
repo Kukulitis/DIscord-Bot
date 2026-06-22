@@ -7,8 +7,12 @@ http.createServer((_, res) => res.writeHead(200).end()).listen(process.env.PORT 
 const itemCmd   = require('./commands/item');
 const marketCmd = require('./commands/market');
 const linkCmd   = require('./commands/link');
+const claimCmd  = require('./commands/claim');
+const perks     = require('./perks');
+const { PERK_COOLDOWN_CHANNEL_ID } = require('./constants');
 
 const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
+const PERK_CHECK_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes
 
 if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
   console.error('Missing DISCORD_TOKEN, CLIENT_ID, or GUILD_ID in .env');
@@ -26,9 +30,30 @@ async function registerCommands() {
       marketCmd.buyData.toJSON(),
       marketCmd.sellData.toJSON(),
       linkCmd.data.toJSON(),
+      claimCmd.data.toJSON(),
     ],
   });
   console.log('Slash commands registered.');
+}
+
+// ── perk cooldown checker ─────────────────────────────────────────────────────
+
+async function checkPerkCooldowns() {
+  const expired = perks.findExpired();
+  if (expired.length === 0) return;
+
+  const channel = await client.channels.fetch(PERK_COOLDOWN_CHANNEL_ID).catch(() => null);
+  if (!channel) {
+    console.error('Could not reach perk cooldown channel:', PERK_COOLDOWN_CHANNEL_ID);
+    return;
+  }
+
+  for (const { userId, type } of expired) {
+    await channel.send({
+      content: `<@${userId}> your ${type} perk is ready to claim again.`,
+      components: [claimCmd.readyRow(userId, type)],
+    }).catch(() => {});
+  }
 }
 
 // ── client ────────────────────────────────────────────────────────────────────
@@ -38,6 +63,8 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 client.once('ready', async () => {
   await registerCommands();
   console.log(`Logged in as ${client.user.tag}`);
+  checkPerkCooldowns();
+  setInterval(checkPerkCooldowns, PERK_CHECK_INTERVAL_MS);
 });
 
 client.on('interactionCreate', async interaction => {
@@ -56,6 +83,9 @@ client.on('interactionCreate', async interaction => {
       if (interaction.customId.startsWith('market:offermodal:')) {
         return await marketCmd.handleModal(interaction);
       }
+      if (interaction.customId.startsWith('perk:editmodal:')) {
+        return await claimCmd.handleModal(interaction);
+      }
       return;
     }
 
@@ -63,6 +93,9 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('market:')) {
         return await marketCmd.handleButton(interaction);
+      }
+      if (interaction.customId.startsWith('perk:')) {
+        return await claimCmd.handleButton(interaction);
       }
       return;
     }
@@ -80,6 +113,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.commandName === 'buy')  return await marketCmd.postListing(interaction, 'buy');
     if (interaction.commandName === 'sell') return await marketCmd.postListing(interaction, 'sell');
     if (interaction.commandName === 'link') return await linkCmd.handleLink(interaction);
+    if (interaction.commandName === 'claim') return await claimCmd.handleClaim(interaction);
 
   } catch (err) {
     console.error('Interaction error:', err);

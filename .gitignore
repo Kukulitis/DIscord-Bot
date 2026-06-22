@@ -1,3 +1,5 @@
 node_modules/
 .env
 items.json
+listings.json
+perks.json
