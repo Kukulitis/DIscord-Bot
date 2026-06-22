@@ -6,6 +6,7 @@ const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
 http.createServer((_, res) => res.writeHead(200).end()).listen(process.env.PORT || 3000);
 const itemCmd   = require('./commands/item');
 const marketCmd = require('./commands/market');
+const linkCmd   = require('./commands/link');
 
 const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
@@ -24,6 +25,7 @@ async function registerCommands() {
       itemCmd.data.toJSON(),
       marketCmd.buyData.toJSON(),
       marketCmd.sellData.toJSON(),
+      linkCmd.data.toJSON(),
     ],
   });
   console.log('Slash commands registered.');
@@ -77,6 +79,7 @@ client.on('interactionCreate', async interaction => {
 
     if (interaction.commandName === 'buy')  return await marketCmd.postListing(interaction, 'buy');
     if (interaction.commandName === 'sell') return await marketCmd.postListing(interaction, 'sell');
+    if (interaction.commandName === 'link') return await linkCmd.handleLink(interaction);
 
   } catch (err) {
     console.error('Interaction error:', err);
