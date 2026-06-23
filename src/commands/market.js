@@ -7,6 +7,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  MessageFlags,
 } = require('discord.js');
 const listings  = require('../listings');
 const storage   = require('../storage');
@@ -36,7 +37,7 @@ function buildEmbed(listing) {
   const statusTag = status === 'sold' ? ' — Sold' : status === 'cancelled' ? ' — Cancelled' : '';
   const title     = `${listing.name}${statusTag}`;
 
-  const priceLabel = isBuy ? 'Budget' : 'Price';
+  const priceLabel  = isBuy ? 'Budget' : 'Price';
   const posterLabel = isBuy ? 'From' : 'Posted by';
   const posterValue = listing.posterName ?? `<@${listing.userId}>`;
 
@@ -45,8 +46,8 @@ function buildEmbed(listing) {
     .setAuthor({ name: typeTag })
     .setTitle(title)
     .addFields(
-      { name: priceLabel,   value: priceStr(listing.amount, listing.currency), inline: true },
-      { name: posterLabel,  value: posterValue,                                inline: true },
+      { name: priceLabel,  value: priceStr(listing.amount, listing.currency), inline: true },
+      { name: posterLabel, value: posterValue,                                inline: true },
     )
     .setFooter({ text: `ID: ${listing.id}` })
     .setTimestamp(new Date(listing.createdAt));
@@ -114,219 +115,222 @@ async function refreshMessage(client, listing) {
 // ── /buy and /sell ────────────────────────────────────────────────────────────
 
 async function postListing(interaction, type) {
-  const name        = interaction.options.getString('name');
-  const displayName = interaction.member?.displayName ?? interaction.user.globalName ?? interaction.user.username;
-  const posterName  = type === 'buy' ? displayName : null;
-  const description = interaction.options.getString('description');
-  const amount      = interaction.options.getInteger('amount');
-  const currency    = interaction.options.getString('currency');
-
-  const channelId = type === 'buy' ? BUYING_CHANNEL : SELLING_CHANNEL;
-
-  // Verify the bot can reach the channel before replying
-  const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
-  if (!channel) {
-    return interaction.reply({
-      content: 'Could not find the target channel. Make sure the bot has access to it.',
-      ephemeral: true,
-    });
-  }
-
-  const me = interaction.guild?.members?.me;
-  if (me) {
-    const perms = channel.permissionsFor(me);
-    if (!perms?.has('SendMessages') || !perms?.has('EmbedLinks')) {
-      return interaction.reply({
-        content: 'The bot is missing Send Messages or Embed Links permission in that channel.',
-        ephemeral: true,
-      });
-    }
-  }
-
-  await interaction.reply({ content: 'Posted.', ephemeral: true });
-
-  const now         = new Date().toISOString();
-  const itemStatus  = type === 'buy' ? 'buying' : 'selling';
-  const id          = listings.addListing({
-    type, userId: interaction.user.id,
-    channelId, messageId: null,
-    name, posterName, description, amount, currency,
-    status: 'active', createdAt: now,
-  });
-
-  // ── sync to personal item list ────────────────────────────────────────────
-  const userId = interaction.user.id;
-  if (storage.findItem(userId, name)) {
-    storage.updateItem(userId, name, { status: itemStatus, updatedAt: now });
-  } else {
-    storage.addItem(userId, { name, category: 'other', status: itemStatus, createdAt: now, updatedAt: now });
-  }
-  await refreshPlayerMessage(interaction.client, userId, displayName);
-
-  const listing = listings.getListing(id);
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
-    const msg = await channel.send({
+    const name        = interaction.options.getString('name');
+    const displayName = interaction.member?.displayName ?? interaction.user.globalName ?? interaction.user.username;
+    const posterName  = type === 'buy' ? displayName : null;
+    const description = interaction.options.getString('description');
+    const amount       = interaction.options.getInteger('amount');
+    const currency     = interaction.options.getString('currency');
+
+    const channelId = type === 'buy' ? BUYING_CHANNEL : SELLING_CHANNEL;
+
+    const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
+    if (!channel) {
+      return interaction.editReply('Could not find the target channel. Make sure the bot has access to it.');
+    }
+
+    const me = interaction.guild?.members?.me;
+    if (me) {
+      const perms = channel.permissionsFor(me);
+      if (!perms?.has('SendMessages') || !perms?.has('EmbedLinks')) {
+        return interaction.editReply('The bot is missing Send Messages or Embed Links permission in that channel.');
+      }
+    }
+
+    const now        = new Date().toISOString();
+    const itemStatus = type === 'buy' ? 'buying' : 'selling';
+    const id         = listings.addListing({
+      type, userId: interaction.user.id,
+      channelId, messageId: null,
+      name, posterName, description, amount, currency,
+      status: 'active', createdAt: now,
+    });
+
+    // ── sync to personal item list ────────────────────────────────────────────
+    const userId = interaction.user.id;
+    if (storage.findItem(userId, name)) {
+      storage.updateItem(userId, name, { status: itemStatus, updatedAt: now });
+    } else {
+      storage.addItem(userId, { name, category: 'other', status: itemStatus, createdAt: now, updatedAt: now });
+    }
+    await refreshPlayerMessage(interaction.client, userId, displayName);
+
+    const listing = listings.getListing(id);
+    const msg     = await channel.send({
       embeds:     [buildEmbed(listing)],
       components: [buildButtons(id)],
     });
     listings.updateListing(id, { messageId: msg.id });
+
+    return interaction.editReply('Posted.');
   } catch (err) {
-    console.error('[postListing] channel.send failed:', err);
-    await interaction.followUp({
-      content: `Failed to post: ${err.message}`,
-      ephemeral: true,
-    });
+    console.error(`[postListing:${type}] error:`, err);
+    return interaction.editReply('Something went wrong while posting your listing.').catch(() => {});
   }
 }
 
 // ── button handler ────────────────────────────────────────────────────────────
 
 async function handleButton(interaction) {
-  const [, action, listingId] = interaction.customId.split(':');
-  const listing = listings.getListing(listingId);
+  try {
+    const [, action, listingId] = interaction.customId.split(':');
+    const listing = listings.getListing(listingId);
 
-  if (!listing) {
-    return interaction.reply({ content: 'This listing no longer exists.', ephemeral: true });
+    if (!listing) {
+      return interaction.reply({ content: 'This listing no longer exists.', flags: MessageFlags.Ephemeral });
+    }
+    if (listing.status !== 'active') {
+      return interaction.reply({ content: `This listing is already ${listing.status}.`, flags: MessageFlags.Ephemeral });
+    }
+
+    // ── Add Offer — must show the modal as the FIRST response, before any defer ──
+    if (action === 'offer') {
+      const modal = new ModalBuilder()
+        .setCustomId(`market:offermodal:${listingId}`)
+        .setTitle(`Offer on: ${listing.name}`);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('offer_name')
+            .setLabel('Who is offering?')
+            .setPlaceholder('e.g. Steve')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(32),
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('offer_amount')
+            .setLabel('Offered amount (number)')
+            .setPlaceholder('e.g. 45')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(10),
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('offer_currency')
+            .setLabel('Currency  (coins  or  money)')
+            .setPlaceholder('coins')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(10),
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('offer_note')
+            .setLabel('Note (optional)')
+            .setPlaceholder('e.g. Can deliver right now')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(false)
+            .setMaxLength(200),
+        ),
+      );
+      return interaction.showModal(modal);
+    }
+
+    // ── Cancel / Sold — poster only ───────────────────────────────────────────
+    if (interaction.user.id !== listing.userId) {
+      return interaction.reply({
+        content: 'Only the person who posted this listing can do that.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const newStatus   = action === 'cancel' ? 'cancelled' : 'sold';
+    const updated     = listings.updateListing(listingId, { status: newStatus });
+    const displayName = interaction.member?.displayName ?? interaction.user.globalName ?? interaction.user.username;
+
+    await refreshMessage(interaction.client, updated);
+
+    // ── remove from personal item list ────────────────────────────────────────
+    storage.removeItem(listing.userId, listing.name);
+    await refreshPlayerMessage(interaction.client, listing.userId, displayName);
+
+    const reply = newStatus === 'sold'
+      ? `${listing.name} marked as sold.`
+      : `${listing.name} cancelled.`;
+
+    return interaction.editReply(reply);
+  } catch (err) {
+    console.error('[market handleButton] error:', err);
+    const msg = { content: 'Something went wrong.', flags: MessageFlags.Ephemeral };
+    if (interaction.deferred || interaction.replied) {
+      return interaction.followUp(msg).catch(() => {});
+    }
+    return interaction.reply(msg).catch(() => {});
   }
-  if (listing.status !== 'active') {
-    return interaction.reply({ content: `This listing is already ${listing.status}.`, ephemeral: true });
-  }
-
-  // ── Add Offer — open modal ────────────────────────────────────────────────
-  if (action === 'offer') {
-    const modal = new ModalBuilder()
-      .setCustomId(`market:offermodal:${listingId}`)
-      .setTitle(`Offer on: ${listing.name}`);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('offer_name')
-          .setLabel('Who is offering?')
-          .setPlaceholder('e.g. Steve')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setMaxLength(32),
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('offer_amount')
-          .setLabel('Offered amount (number)')
-          .setPlaceholder('e.g. 45')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setMaxLength(10),
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('offer_currency')
-          .setLabel('Currency  (coins  or  money)')
-          .setPlaceholder('coins')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setMaxLength(10),
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('offer_note')
-          .setLabel('Note (optional)')
-          .setPlaceholder('e.g. Can deliver right now')
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(false)
-          .setMaxLength(200),
-      ),
-    );
-    return interaction.showModal(modal);
-  }
-
-  // ── Cancel / Sold — poster only ───────────────────────────────────────────
-  if (interaction.user.id !== listing.userId) {
-    return interaction.reply({
-      content: 'Only the person who posted this listing can do that.',
-      ephemeral: true,
-    });
-  }
-
-  const newStatus   = action === 'cancel' ? 'cancelled' : 'sold';
-  const updated     = listings.updateListing(listingId, { status: newStatus });
-  const displayName = interaction.member?.displayName ?? interaction.user.globalName ?? interaction.user.username;
-
-  await refreshMessage(interaction.client, updated);
-
-  // ── remove from personal item list ────────────────────────────────────────
-  storage.removeItem(listing.userId, listing.name);
-  await refreshPlayerMessage(interaction.client, listing.userId, displayName);
-
-  const reply = newStatus === 'sold'
-    ? `${listing.name} marked as sold.`
-    : `${listing.name} cancelled.`;
-
-  return interaction.reply({ content: reply, ephemeral: true });
 }
 
 // ── modal submit handler ──────────────────────────────────────────────────────
 
 async function handleModal(interaction) {
-  const [, , listingId] = interaction.customId.split(':');
-  const listing = listings.getListing(listingId);
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  if (!listing) {
-    return interaction.reply({ content: 'This listing no longer exists.', ephemeral: true });
-  }
-  if (listing.status !== 'active') {
-    return interaction.reply({
-      content: `This listing is already ${listing.status}.`,
-      ephemeral: true,
-    });
-  }
-
-  const offererName = interaction.fields.getTextInputValue('offer_name').trim();
-  const rawAmount   = interaction.fields.getTextInputValue('offer_amount').trim();
-  const rawCurrency = interaction.fields.getTextInputValue('offer_currency').trim().toLowerCase();
-  const note        = interaction.fields.getTextInputValue('offer_note').trim();
-
-  if (!offererName) {
-    return interaction.reply({ content: 'Please enter a name.', ephemeral: true });
-  }
-  const amount = parseInt(rawAmount, 10);
-  if (isNaN(amount) || amount < 1) {
-    return interaction.reply({ content: 'Amount must be a positive number.', ephemeral: true });
-  }
-  if (!CURRENCIES[rawCurrency]) {
-    return interaction.reply({ content: 'Currency must be coins or money.', ephemeral: true });
-  }
-
-  // Add offer to listing and edit the original message
-  const updated = listings.addOffer(listingId, {
-    name:      offererName,
-    userId:    interaction.user.id,
-    amount,
-    currency:  rawCurrency,
-    note:      note || null,
-    createdAt: new Date().toISOString(),
-  });
-
-  await refreshMessage(interaction.client, updated);
-
-  // DM the poster so they're notified without cluttering the channel
   try {
-    const poster = await interaction.client.users.fetch(listing.userId);
-    const dmLines = [
-      `💬 **New offer on your listing: ${listing.name}**`,
-      `From: **${offererName}**`,
-      `Offer: **${priceStr(amount, rawCurrency)}**`,
-    ];
-    if (note) dmLines.push(`Note: *"${note}"*`);
-    await poster.send(dmLines.join('\n'));
-  } catch {
-    // User has DMs disabled — silently skip
-  }
+    const [, , listingId] = interaction.customId.split(':');
+    const listing = listings.getListing(listingId);
 
-  return interaction.reply({
-    content: `Offer of ${priceStr(amount, rawCurrency)} added.`,
-    ephemeral: true,
-  });
+    if (!listing) {
+      return interaction.editReply('This listing no longer exists.');
+    }
+    if (listing.status !== 'active') {
+      return interaction.editReply(`This listing is already ${listing.status}.`);
+    }
+
+    const offererName = interaction.fields.getTextInputValue('offer_name').trim();
+    const rawAmount    = interaction.fields.getTextInputValue('offer_amount').trim();
+    const rawCurrency  = interaction.fields.getTextInputValue('offer_currency').trim().toLowerCase();
+    const note         = interaction.fields.getTextInputValue('offer_note').trim();
+
+    if (!offererName) {
+      return interaction.editReply('Please enter a name.');
+    }
+    const amount = parseInt(rawAmount, 10);
+    if (isNaN(amount) || amount < 1) {
+      return interaction.editReply('Amount must be a positive number.');
+    }
+    if (!CURRENCIES[rawCurrency]) {
+      return interaction.editReply('Currency must be coins or money.');
+    }
+
+    // Add offer to listing and edit the original message
+    const updated = listings.addOffer(listingId, {
+      name:      offererName,
+      userId:    interaction.user.id,
+      amount,
+      currency:  rawCurrency,
+      note:      note || null,
+      createdAt: new Date().toISOString(),
+    });
+
+    await refreshMessage(interaction.client, updated);
+
+    // DM the poster so they're notified without cluttering the channel
+    try {
+      const poster = await interaction.client.users.fetch(listing.userId);
+      const dmLines = [
+        `New offer on your listing: ${listing.name}`,
+        `From: ${offererName}`,
+        `Offer: ${priceStr(amount, rawCurrency)}`,
+      ];
+      if (note) dmLines.push(`Note: "${note}"`);
+      await poster.send(dmLines.join('\n'));
+    } catch {
+      // User has DMs disabled — silently skip
+    }
+
+    return interaction.editReply(`Offer of ${priceStr(amount, rawCurrency)} added.`);
+  } catch (err) {
+    console.error('[market handleModal] error:', err);
+    return interaction.editReply('Something went wrong submitting your offer.').catch(() => {});
+  }
 }
 
 // ── command definitions ───────────────────────────────────────────────────────

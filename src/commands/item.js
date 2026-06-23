@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const storage = require('../storage');
 const { STATUS_CHOICES, STATUSES, CATEGORY_CHOICES, CATEGORIES } = require('../constants');
 const { refreshPlayerMessage } = require('../playerMessage');
@@ -10,101 +10,124 @@ function getDisplayName(interaction) {
 // ── /item add ─────────────────────────────────────────────────────────────────
 
 async function handleAdd(interaction) {
-  const name     = interaction.options.getString('name');
-  const category = interaction.options.getString('category');
-  const status   = interaction.options.getString('status');
-  const userId      = interaction.user.id;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  if (storage.findItem(userId, name)) {
-    return interaction.reply({
-      content: `You already have an item called ${name}. Use /item edit to change it.`,
-      ephemeral: true,
-    });
+  try {
+    const name     = interaction.options.getString('name');
+    const category = interaction.options.getString('category');
+    const status   = interaction.options.getString('status');
+    const userId   = interaction.user.id;
+
+    if (storage.findItem(userId, name)) {
+      return interaction.editReply(`You already have an item called ${name}. Use /item edit to change it.`);
+    }
+
+    const now = new Date().toISOString();
+    storage.addItem(userId, { name, category, status, createdAt: now, updatedAt: now });
+
+    await refreshPlayerMessage(interaction.client, userId, getDisplayName(interaction));
+
+    return interaction.editReply(`${name} added.`);
+  } catch (err) {
+    console.error('[item add] error:', err);
+    return interaction.editReply('Something went wrong adding that item.').catch(() => {});
   }
-
-  const now = new Date().toISOString();
-  storage.addItem(userId, { name, category, status, createdAt: now, updatedAt: now });
-
-  await refreshPlayerMessage(interaction.client, userId, getDisplayName(interaction));
-
-  return interaction.reply({ content: `${name} added.`, ephemeral: true });
 }
 
 // ── /item remove ──────────────────────────────────────────────────────────────
 
 async function handleRemove(interaction) {
-  const name   = interaction.options.getString('name');
-  const userId = interaction.user.id;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const updated = storage.removeItem(userId, name);
-  if (!updated) {
-    return interaction.reply({ content: `You don't have an item called ${name}.`, ephemeral: true });
+  try {
+    const name   = interaction.options.getString('name');
+    const userId = interaction.user.id;
+
+    const updated = storage.removeItem(userId, name);
+    if (!updated) {
+      return interaction.editReply(`You don't have an item called ${name}.`);
+    }
+
+    await refreshPlayerMessage(interaction.client, userId, getDisplayName(interaction));
+
+    return interaction.editReply(`${name} removed.`);
+  } catch (err) {
+    console.error('[item remove] error:', err);
+    return interaction.editReply('Something went wrong removing that item.').catch(() => {});
   }
-
-  await refreshPlayerMessage(interaction.client, userId, getDisplayName(interaction));
-
-  return interaction.reply({ content: `${name} removed.`, ephemeral: true });
 }
 
 // ── /item edit ────────────────────────────────────────────────────────────────
 
 async function handleEdit(interaction) {
-  const name   = interaction.options.getString('name');
-  const field  = interaction.options.getString('field');
-  const value  = interaction.options.getString('value');
-  const userId = interaction.user.id;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  if (!storage.findItem(userId, name)) {
-    return interaction.reply({ content: `You don't have an item called ${name}.`, ephemeral: true });
+  try {
+    const name   = interaction.options.getString('name');
+    const field  = interaction.options.getString('field');
+    const value  = interaction.options.getString('value');
+    const userId = interaction.user.id;
+
+    if (!storage.findItem(userId, name)) {
+      return interaction.editReply(`You don't have an item called ${name}.`);
+    }
+
+    let patch = { updatedAt: new Date().toISOString() };
+
+    switch (field) {
+      case 'name':
+        if (storage.findItem(userId, value)) {
+          return interaction.editReply(`You already have an item called ${value}.`);
+        }
+        patch.name = value;
+        break;
+
+      case 'category':
+        if (!CATEGORIES[value]) {
+          return interaction.editReply(`Invalid category. Choose from: ${Object.keys(CATEGORIES).join(', ')}`);
+        }
+        patch.category = value;
+        break;
+
+      case 'status':
+        if (!STATUSES[value]) {
+          return interaction.editReply(`Invalid status. Choose from: ${Object.keys(STATUSES).join(', ')}`);
+        }
+        patch.status = value;
+        break;
+
+      default:
+        return interaction.editReply(`Unknown field: ${field}`);
+    }
+
+    storage.updateItem(userId, name, patch);
+    await refreshPlayerMessage(interaction.client, userId, getDisplayName(interaction));
+
+    return interaction.editReply(`${name} updated.`);
+  } catch (err) {
+    console.error('[item edit] error:', err);
+    return interaction.editReply('Something went wrong updating that item.').catch(() => {});
   }
-
-  let patch = { updatedAt: new Date().toISOString() };
-
-  switch (field) {
-    case 'name':
-      if (storage.findItem(userId, value)) {
-        return interaction.reply({ content: `You already have an item called ${value}.`, ephemeral: true });
-      }
-      patch.name = value;
-      break;
-
-    case 'category':
-      if (!CATEGORIES[value]) {
-        return interaction.reply({ content: `Invalid category. Choose from: ${Object.keys(CATEGORIES).join(', ')}`, ephemeral: true });
-      }
-      patch.category = value;
-      break;
-
-    case 'status':
-      if (!STATUSES[value]) {
-        return interaction.reply({ content: `Invalid status. Choose from: ${Object.keys(STATUSES).join(', ')}`, ephemeral: true });
-      }
-      patch.status = value;
-      break;
-
-    default:
-      return interaction.reply({ content: `Unknown field: ${field}`, ephemeral: true });
-  }
-
-  storage.updateItem(userId, name, patch);
-  await refreshPlayerMessage(interaction.client, userId, getDisplayName(interaction));
-
-  return interaction.reply({ content: `${name} updated.`, ephemeral: true });
 }
 
 // ── autocomplete — only the caller's own items ────────────────────────────────
 
 async function handleAutocomplete(interaction) {
-  const focused = interaction.options.getFocused().toLowerCase();
-  const player  = storage.getPlayer(interaction.user.id);
-  if (!player) return interaction.respond([]);
+  try {
+    const focused = interaction.options.getFocused().toLowerCase();
+    const player  = storage.getPlayer(interaction.user.id);
+    if (!player) return interaction.respond([]);
 
-  const matches = player.items
-    .filter(i => i.name.toLowerCase().includes(focused))
-    .slice(0, 25)
-    .map(i => ({ name: i.name, value: i.name }));
+    const matches = player.items
+      .filter(i => i.name.toLowerCase().includes(focused))
+      .slice(0, 25)
+      .map(i => ({ name: i.name, value: i.name }));
 
-  return interaction.respond(matches);
+    return interaction.respond(matches);
+  } catch (err) {
+    console.error('[item autocomplete] error:', err);
+    return interaction.respond([]).catch(() => {});
+  }
 }
 
 // ── command definition ────────────────────────────────────────────────────────

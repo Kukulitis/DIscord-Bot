@@ -6,6 +6,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  MessageFlags,
 } = require('discord.js');
 const perks = require('../perks');
 const { PERK_COOLDOWN_CHANNEL_ID } = require('../constants');
@@ -34,106 +35,127 @@ function readyRow(userId, type) {
 }
 
 async function handleClaim(interaction) {
-  const type   = interaction.options.getSubcommand(); // 'weekly' or 'monthly'
-  const userId = interaction.user.id;
-  const result = perks.claim(userId, type);
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  if (!result.ok) {
-    return interaction.reply({
-      content: `You can claim your ${type} perk in ${perks.formatDuration(result.msLeft)}.`,
-      components: [cooldownRow(userId, type)],
-      ephemeral: true,
-    });
+  try {
+    const type   = interaction.options.getSubcommand(); // 'weekly' or 'monthly'
+    const userId = interaction.user.id;
+    const result = perks.claim(userId, type);
+
+    if (!result.ok) {
+      return interaction.editReply({
+        content: `You can claim your ${type} perk in ${perks.formatDuration(result.msLeft)}.`,
+        components: [cooldownRow(userId, type)],
+      });
+    }
+
+    return interaction.editReply(
+      `Your ${type} perk has been claimed. You'll be pinged in <#${PERK_COOLDOWN_CHANNEL_ID}> when it's ready again.`,
+    );
+  } catch (err) {
+    console.error('[claim] error:', err);
+    return interaction.editReply('Something went wrong claiming your perk.').catch(() => {});
   }
-
-  return interaction.reply({
-    content: `Your ${type} perk has been claimed. You'll be pinged in <#${PERK_COOLDOWN_CHANNEL_ID}> when it's ready again.`,
-    ephemeral: true,
-  });
 }
 
 async function handleButton(interaction) {
-  const [, action, userId, type] = interaction.customId.split(':');
+  try {
+    const [, action, userId, type] = interaction.customId.split(':');
 
-  if (interaction.user.id !== userId) {
-    return interaction.reply({ content: 'Only the owner of this timer can do that.', ephemeral: true });
-  }
-
-  if (action === 'cancel') {
-    return interaction.update({ content: 'Cancelled.', components: [] });
-  }
-
-  if (action === 'turnoff') {
-    perks.turnOff(userId, type);
-    return interaction.update({ content: `Your ${type} timer has been turned off.`, components: [] });
-  }
-
-  if (action === 'restart') {
-    const result = perks.claim(userId, type);
-    if (!result.ok) {
-      return interaction.update({
-        content: `You can claim your ${type} perk in ${perks.formatDuration(result.msLeft)}.`,
-        components: [],
-      });
+    if (interaction.user.id !== userId) {
+      return interaction.reply({ content: 'Only the owner of this timer can do that.', flags: MessageFlags.Ephemeral });
     }
-    return interaction.update({ content: `Your ${type} timer has been restarted.`, components: [] });
-  }
 
-  if (action === 'edit') {
-    const modal = new ModalBuilder()
-      .setCustomId(`perk:editmodal:${userId}:${type}`)
-      .setTitle(`Edit ${type} timer`);
+    // ── Edit time left — must show the modal as the FIRST response, before any defer ──
+    if (action === 'edit') {
+      const modal = new ModalBuilder()
+        .setCustomId(`perk:editmodal:${userId}:${type}`)
+        .setTitle(`Edit ${type} timer`);
 
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('edit_days')
-          .setLabel('Days left')
-          .setPlaceholder('e.g. 3')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setMaxLength(4),
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('edit_hours')
-          .setLabel('Hours left')
-          .setPlaceholder('e.g. 4')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setMaxLength(3),
-      ),
-    );
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('edit_days')
+            .setLabel('Days left')
+            .setPlaceholder('e.g. 3')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setMaxLength(4),
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('edit_hours')
+            .setLabel('Hours left')
+            .setPlaceholder('e.g. 4')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setMaxLength(3),
+        ),
+      );
 
-    return interaction.showModal(modal);
+      return interaction.showModal(modal);
+    }
+
+    if (action === 'cancel') {
+      return interaction.update({ content: 'Cancelled.', components: [] });
+    }
+
+    if (action === 'turnoff') {
+      perks.turnOff(userId, type);
+      return interaction.update({ content: `Your ${type} timer has been turned off.`, components: [] });
+    }
+
+    if (action === 'restart') {
+      const result = perks.claim(userId, type);
+      if (!result.ok) {
+        return interaction.update({
+          content: `You can claim your ${type} perk in ${perks.formatDuration(result.msLeft)}.`,
+          components: [],
+        });
+      }
+      return interaction.update({ content: `Your ${type} timer has been restarted.`, components: [] });
+    }
+  } catch (err) {
+    console.error('[claim handleButton] error:', err);
+    const msg = { content: 'Something went wrong.', flags: MessageFlags.Ephemeral };
+    if (interaction.deferred || interaction.replied) {
+      return interaction.followUp(msg).catch(() => {});
+    }
+    return interaction.reply(msg).catch(() => {});
   }
 }
 
 async function handleModal(interaction) {
-  const [, , userId, type] = interaction.customId.split(':');
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  if (interaction.user.id !== userId) {
-    return interaction.reply({ content: 'Only the owner of this timer can do that.', ephemeral: true });
+  try {
+    const [, , userId, type] = interaction.customId.split(':');
+
+    if (interaction.user.id !== userId) {
+      return interaction.editReply('Only the owner of this timer can do that.');
+    }
+
+    const rawDays  = interaction.fields.getTextInputValue('edit_days').trim();
+    const rawHours = interaction.fields.getTextInputValue('edit_hours').trim();
+    const days     = rawDays  ? parseInt(rawDays, 10)  : 0;
+    const hours    = rawHours ? parseInt(rawHours, 10) : 0;
+
+    if (isNaN(days) || isNaN(hours) || days < 0 || hours < 0) {
+      return interaction.editReply('Days and hours must be 0 or positive numbers.');
+    }
+
+    const msLeft = (days * 24 * 60 * 60 * 1000) + (hours * 60 * 60 * 1000);
+    perks.setTimeLeft(userId, type, msLeft);
+
+    return interaction.editReply(
+      msLeft > 0
+        ? `Your ${type} timer now has ${perks.formatDuration(msLeft)} left.`
+        : `Your ${type} timer has been set to 0 — you can claim it again now.`,
+    );
+  } catch (err) {
+    console.error('[claim handleModal] error:', err);
+    return interaction.editReply('Something went wrong updating your timer.').catch(() => {});
   }
-
-  const rawDays  = interaction.fields.getTextInputValue('edit_days').trim();
-  const rawHours = interaction.fields.getTextInputValue('edit_hours').trim();
-  const days     = rawDays  ? parseInt(rawDays, 10)  : 0;
-  const hours    = rawHours ? parseInt(rawHours, 10) : 0;
-
-  if (isNaN(days) || isNaN(hours) || days < 0 || hours < 0) {
-    return interaction.reply({ content: 'Days and hours must be 0 or positive numbers.', ephemeral: true });
-  }
-
-  const msLeft = (days * 24 * 60 * 60 * 1000) + (hours * 60 * 60 * 1000);
-  perks.setTimeLeft(userId, type, msLeft);
-
-  return interaction.reply({
-    content: msLeft > 0
-      ? `Your ${type} timer now has ${perks.formatDuration(msLeft)} left.`
-      : `Your ${type} timer has been set to 0 — you can claim it again now.`,
-    ephemeral: true,
-  });
 }
 
 module.exports = { data, handleClaim, handleButton, handleModal, readyRow };

@@ -1,6 +1,6 @@
 require('dotenv').config();
 const http = require('http');
-const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, MessageFlags } = require('discord.js');
 
 // Minimal HTTP server — keeps Render happy by holding an open port
 http.createServer((_, res) => res.writeHead(200).end()).listen(process.env.PORT || 3000);
@@ -39,20 +39,26 @@ async function registerCommands() {
 // ── perk cooldown checker ─────────────────────────────────────────────────────
 
 async function checkPerkCooldowns() {
-  const expired = perks.findExpired();
-  if (expired.length === 0) return;
+  try {
+    const expired = perks.findExpired();
+    if (expired.length === 0) return;
 
-  const channel = await client.channels.fetch(PERK_COOLDOWN_CHANNEL_ID).catch(() => null);
-  if (!channel) {
-    console.error('Could not reach perk cooldown channel:', PERK_COOLDOWN_CHANNEL_ID);
-    return;
-  }
+    const channel = await client.channels.fetch(PERK_COOLDOWN_CHANNEL_ID).catch(() => null);
+    if (!channel) {
+      console.error('Could not reach perk cooldown channel:', PERK_COOLDOWN_CHANNEL_ID);
+      return;
+    }
 
-  for (const { userId, type } of expired) {
-    await channel.send({
-      content: `<@${userId}> your ${type} perk is ready to claim again.`,
-      components: [claimCmd.readyRow(userId, type)],
-    }).catch(() => {});
+    for (const { userId, type } of expired) {
+      await channel.send({
+        content: `<@${userId}> your ${type} perk is ready to claim again.`,
+        components: [claimCmd.readyRow(userId, type)],
+      }).catch(() => {});
+    }
+  } catch (err) {
+    // Never let this throw — an unhandled rejection inside a bare setInterval
+    // callback can crash the whole process on Node, taking the bot down.
+    console.error('[checkPerkCooldowns] error:', err);
   }
 }
 
@@ -117,7 +123,7 @@ client.on('interactionCreate', async interaction => {
 
   } catch (err) {
     console.error('Interaction error:', err);
-    const msg = { content: 'Something went wrong.', ephemeral: true };
+    const msg = { content: 'Something went wrong.', flags: MessageFlags.Ephemeral };
     if (interaction.replied || interaction.deferred) {
       await interaction.followUp(msg).catch(() => {});
     } else {
