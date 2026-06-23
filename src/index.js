@@ -1,15 +1,36 @@
+process.on('uncaughtException', err => console.error('[uncaughtException]', err));
+process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
+
 require('dotenv').config();
+console.log('Step: dotenv loaded');
+
 const http = require('http');
+console.log('Step: http required');
+
 const { Client, GatewayIntentBits, REST, Routes, MessageFlags } = require('discord.js');
+console.log('Step: discord.js required');
 
 // Minimal HTTP server — keeps Render happy by holding an open port
 http.createServer((_, res) => res.writeHead(200).end()).listen(process.env.PORT || 3000);
-const itemCmd   = require('./commands/item');
+console.log('Step: HTTP server listening on port', process.env.PORT || 3000);
+
+const itemCmd = require('./commands/item');
+console.log('Step: itemCmd required');
+
 const marketCmd = require('./commands/market');
-const linkCmd   = require('./commands/link');
-const claimCmd  = require('./commands/claim');
-const perks     = require('./perks');
+console.log('Step: marketCmd required');
+
+const linkCmd = require('./commands/link');
+console.log('Step: linkCmd required');
+
+const claimCmd = require('./commands/claim');
+console.log('Step: claimCmd required');
+
+const perks = require('./perks');
+console.log('Step: perks required');
+
 const { PERK_COOLDOWN_CHANNEL_ID } = require('./constants');
+console.log('Step: constants required');
 
 const { DISCORD_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 const PERK_CHECK_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes
@@ -18,6 +39,7 @@ if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
   console.error('Missing DISCORD_TOKEN, CLIENT_ID, or GUILD_ID in .env');
   process.exit(1);
 }
+console.log('Step: env vars present');
 
 // ── register slash commands ───────────────────────────────────────────────────
 
@@ -65,10 +87,11 @@ async function checkPerkCooldowns() {
 // ── client ────────────────────────────────────────────────────────────────────
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+console.log('Step: Client instance created');
 
 client.once('ready', async () => {
-  await registerCommands();
   console.log(`Logged in as ${client.user.tag}`);
+  await registerCommands();
   checkPerkCooldowns();
   setInterval(checkPerkCooldowns, PERK_CHECK_INTERVAL_MS);
 });
@@ -133,3 +156,4 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.login(DISCORD_TOKEN);
+console.log('Step: client.login() called');
